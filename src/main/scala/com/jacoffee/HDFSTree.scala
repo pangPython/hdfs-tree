@@ -1,7 +1,7 @@
 package com.jacoffee
 
 import com.jacoffee.util.Logging
-import org.apache.hadoop.fs.{FileSystem, PathFilter, Path}
+import org.apache.hadoop.fs.{FileSystem, LocatedFileStatus, Path, PathFilter}
 import com.jacoffee.util.HDFSUtil._
 import org.joda.time.DateTime
 import org.rogach.scallop.Scallop
@@ -14,31 +14,32 @@ object HDFSTree extends Logging {
 
     override def build(className: String, args: Seq[String]) = {
       val opts = Scallop(args)
-          .banner(s"""Usage: hdfs-tree [OPTION]
-                      |Options:
-                      |""".stripMargin)
-          .trailArg[String](
-              name = "directory", descr = "the hdfs directory you want to traverse, eg: hdfs://localhost/",
-              validate = (dir: String) => getFileSystem(dir).isDirectory(dir)
-          )
-          .opt[String](
-            name="type", required = false,
-            validate = (tpe: String) => List("d", "f").contains(tpe),
-            descr = "file type to compare, d | f"
-          )
-          .opt[Int](
-            name="depth", required = false,
-            descr = "max traverse depth for directory, default 5"
-          ).opt[Int](
-            name="limit", required = false,
-            descr = "top N to display by sort, default 5"
-          ).opt[String](
-            name="sort", required = false,
-            validate = (sort: String) => defaultOrdering.contains(sort),
-            descr = "sort options, must be size | mtime | count(file count)"
-          ).opt[Boolean](
-            name="reverse", descr = "reverse the sort or not"
-          )
+        .banner(
+          s"""Usage: hdfs-tree [OPTION]
+             |Options:
+             |""".stripMargin)
+        .trailArg[String](
+        name = "directory", descr = "the hdfs directory you want to traverse, eg: hdfs://localhost/",
+        validate = (dir: String) => getFileSystem(dir).isDirectory(dir)
+      )
+        .opt[String](
+        name = "type", required = false,
+        validate = (tpe: String) => List("d", "f").contains(tpe),
+        descr = "file type to compare, d | f"
+      )
+        .opt[Int](
+        name = "depth", required = false,
+        descr = "max traverse depth for directory, default 5"
+      ).opt[Int](
+        name = "limit", required = false,
+        descr = "top N to display by sort, default 5"
+      ).opt[String](
+        name = "sort", required = false,
+        validate = (sort: String) => defaultOrdering.contains(sort),
+        descr = "sort options, must be size | mtime | count(file count)"
+      ).opt[Boolean](
+        name = "reverse", descr = "reverse the sort or not"
+      )
 
       opts
     }
@@ -100,22 +101,59 @@ object HDFSTree extends Logging {
     traverse(file, directoryFilter, fileSystem, traverseOptions)
   }
 
-  def traverse(
-    file: Path, fileFilter: PathFilter, fileSystem: FileSystem, traverseOptions: TraverseOptions
-  ): List[String] = {
+  /**
+    * 递归 遍历
+    *
+    * @param file
+    * @param fileFilter
+    * @param fileSystem
+    * @param traverseOptions
+    * @return
+    */
+  def traverse(file: Path, fileFilter: PathFilter, fileSystem: FileSystem, traverseOptions: TraverseOptions): List[String] = {
     val maxDepth = traverseOptions.maxDepth
     val order = traverseOptions.order
     val topN = traverseOptions.limit
 
+    /**
+      *
+      * @param depth
+      * @param fieldValue
+      * @param file
+      * @return
+      */
     def createPrefixFromLevel(depth: Int, fieldValue: String, file: Path) = {
       if (depth == 0) {
         file.toString
       } else {
+        // 增加 文件 文件夹计数
+        val(fileCount,dirCount) = fileCountDirCount(file,false)
         val indent = List.fill(depth - 1)("\t").mkString
-        "%s├── [%10s] %s".format(indent, fieldValue, file.getName)
+        "%s├── [%10s,%d files,%d directories] %s".format(indent, fieldValue, file.getName,fileCount,dirCount)
       }
     }
 
+    def fileCountDirCount(file: Path,recursive:Boolean) ={
+      var fileCount = 0
+      var dirCount = 0
+      while (fileSystem.listFiles(file,recursive).hasNext){
+        val locatedFileStatus = fileSystem.listFiles(file,true).next()
+        if (locatedFileStatus.isDirectory){
+          dirCount += 1
+        }
+        if(locatedFileStatus.isFile){
+          fileCount += 1
+        }
+      }
+      (fileCount,dirCount)
+    }
+
+    /**
+      *
+      * @param file
+      * @param depth
+      * @return
+      */
     def go(file: Path, depth: Int): List[String] = {
       val fieldValue = orderToFormatFunc(order)(file)
 
@@ -137,8 +175,8 @@ object HDFSTree extends Logging {
   }
 
   private def takeOrdered(
-    file: Path, fileFilter: PathFilter, fileSystem: FileSystem, topN: Int
-  )(ord: Ordering[Path]): List[Path] = {
+                           file: Path, fileFilter: PathFilter, fileSystem: FileSystem, topN: Int
+                         )(ord: Ordering[Path]): List[Path] = {
     val directories = fileSystem.listStatus(file, fileFilter).map { fileStatus =>
       fileStatus.getPath
     }.toList
@@ -148,19 +186,21 @@ object HDFSTree extends Logging {
 
   private def toTraverseOptions(options: Options) = {
     val sort = options.sort
-    val ordering = OrderBy.values.find(_.toString == sort).getOrElse { OrderBy.FILE_SIZE }
+    val ordering = OrderBy.values.find(_.toString == sort).getOrElse {
+      OrderBy.FILE_SIZE
+    }
     TraverseOptions(Order(ordering, options.reverse), options.limit, options.depth)
   }
 
   private def typeOptToPathFilter(typeOpt: Option[String], fileSystem: FileSystem) = {
     new PathFilter {
       override def accept(pathname: Path): Boolean =
-          typeOpt match {
-            case Some(tpe) =>
-              if (tpe == "d") fileSystem.isDirectory(pathname)
-              else fileSystem.isFile(pathname)
-            case _ => true
-          }
+        typeOpt match {
+          case Some(tpe) =>
+            if (tpe == "d") fileSystem.isDirectory(pathname)
+            else fileSystem.isFile(pathname)
+          case _ => true
+        }
     }
   }
 
@@ -174,10 +214,14 @@ object HDFSTree extends Logging {
 
       var fileSystem: FileSystem = null
       try {
+        // 目录 获取 fs
         fileSystem = getFileSystem(options.directory)
+        // 参数
         val traverseOptions = toTraverseOptions(options)
         val pathFilter = typeOptToPathFilter(options.tpeOpt, fileSystem)
-        traverse(options.directory, pathFilter, fileSystem, traverseOptions).foreach { println }
+        traverse(options.directory, pathFilter, fileSystem, traverseOptions).foreach {
+          println
+        }
       } finally {
         if (fileSystem != null) {
           fileSystem.close()
