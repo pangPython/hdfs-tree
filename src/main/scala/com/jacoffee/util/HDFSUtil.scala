@@ -14,6 +14,9 @@ object HDFSUtil {
 
   def getFileSystem(uri: URI): FileSystem = {
     val conf: Configuration = new Configuration
+    conf.addResource("/sdzw/ibp/hadoop_conf/sdzw/core-site.xml")
+    conf.addResource("/sdzw/ibp/hadoop_conf/sdzw/hdfs-site.xml")
+//    conf.addResource("/sdzw/ibp/hadoop_conf/sdzw/yarn-site.xml")
     FileSystem.get(uri, conf)
   }
 
