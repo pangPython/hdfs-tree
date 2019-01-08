@@ -127,25 +127,35 @@ object HDFSTree extends Logging {
         file.toString
       } else {
         // 增加 文件 文件夹计数
-        val(fileCount,dirCount) = fileCountDirCount(file,false)
+        val (fileCount, dirCount) = fileCountDirCount(file, false)
         val indent = List.fill(depth - 1)("\t").mkString
-        "%s├── [%10s,%d files,%d directories] %s".format(indent, fieldValue, file.getName,fileCount,dirCount)
+        "%s├── [%6s,%6s files,%6s directories] %s".format(indent, fieldValue, fileCount.toString, dirCount.toString, file.getName)
       }
     }
 
-    def fileCountDirCount(file: Path,recursive:Boolean) ={
+    /**
+      *
+      * @param file
+      * @param recursive
+      * @return
+      */
+    def fileCountDirCount(file: Path, recursive: Boolean): (Int, Int) = {
       var fileCount = 0
       var dirCount = 0
-      while (fileSystem.listFiles(file,recursive).hasNext){
-        val locatedFileStatus = fileSystem.listFiles(file,true).next()
-        if (locatedFileStatus.isDirectory){
+      val fileList = fileSystem.listFiles(file, recursive)
+      while (fileList.hasNext) {
+        val locatedFileStatus = fileList.next()
+        //        if (locatedFileStatus.isDirectory) {
+        //          dirCount += 1
+        //        }
+        if (locatedFileStatus.isFile) {
+          fileCount += 1
+        } else {
           dirCount += 1
         }
-        if(locatedFileStatus.isFile){
-          fileCount += 1
-        }
       }
-      (fileCount,dirCount)
+//      println("fileCount:" + fileCount + " dirCount:" + dirCount)
+      (fileCount, dirCount)
     }
 
     /**
